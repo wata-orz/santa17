@@ -1,0 +1,7 @@
+[package]
+name = "santa17"
+version = "0.1.0"
+authors = ["wata"]
+
+[dependencies]
+rand = "0.3"
