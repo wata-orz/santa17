@@ -23,7 +23,10 @@ pub struct Graph<C, W> {
 	iter: Vec<usize>
 }
 
-impl<C, W> Graph<C, W> where	C: Copy + Default + Ord + Sub<Output = C> + Neg<Output = C> + AddAssign + SubAssign,
+struct Entry<W>(V, W);
+impl_cmp!(Entry<W>; |a, b| b.1.partial_cmp(&a.1).unwrap(); where W: PartialOrd);
+
+impl<C, W> Graph<C, W> where	C: Copy + Default + Ord + Sub<Output = C> + Neg<Output = C> + AddAssign + SubAssign + From<u8>,
 								W: Copy + Default + Ord + Add<Output = W> + Sub<Output = W> + Mul<Output = W> + Div<Output = W> + Neg<Output = W>
 														+ AddAssign + SubAssign + MulAssign + DivAssign + From<u32> + ::std::fmt::Debug {
 	pub fn new(n: usize) -> Graph<C, W> {
@@ -48,11 +51,16 @@ impl<C, W> Graph<C, W> where	C: Copy + Default + Ord + Sub<Output = C> + Neg<Out
 	/// O(V^2 E log VC), where C=max(cost(e)). When cap=1, O(V E log VC).
 	pub fn solve(&mut self) -> bool {
 		let n = self.es.len();
-		let mut eps = W::from(2);
-		for v in &mut self.es {
-			for e in v {
+		let mut eps = W::default();
+		for v in 0..n {
+			self.p[v] *= (n as u32 + 1).into();
+		}
+		for v in 0..n {
+			for e in &mut self.es[v] {
 				e.cost *= (n as u32 + 1).into();
-				eps.setmax(e.cost);
+				if e.cap > C::default() {
+					eps.setmax(-(e.cost + self.p[v] - self.p[e.to]));
+				}
 			}
 		}
 		let mut stack = vec![];
@@ -146,7 +154,7 @@ impl<C, W> Graph<C, W> where	C: Copy + Default + Ord + Sub<Output = C> + Neg<Out
 	/// Find p s.t. cost(uv) + p(u) - p(v) >= 0 holds for every edge uv with cap(uv) > 0.
 	/// W is expected to be i64. When W is float, use p/(n+1).
 	/// O(E log V)
-	pub fn fitting(&mut self) where W: ::std::fmt::Debug {
+	pub fn fitting(&mut self) {
 		let n = self.es.len();
 		let mut d: Vec<W> = self.p.iter().map(|&a| a / (n as u32 + 1).into()).collect(); // p must be non-positive.
 		let mut d2: Vec<W> = (0..n).map(|v| d[v] * (n as u32 + 1).into() - self.p[v] + 1.into()).collect();
@@ -167,184 +175,82 @@ impl<C, W> Graph<C, W> where	C: Copy + Default + Ord + Sub<Output = C> + Neg<Out
 		}
 		self.p = d
 	}
-}
-
-
-#[test]
-fn test_matching() {
-	use rand::{self, Rng};
-	let mut rng: rand::XorShiftRng = rand::random();
-	for _ in 0..100 {
-		let n = rng.gen_range(1, 10);
-		let m = rng.gen_range(1, 10);
-		let mut cost = mat![!0; n; m];
-		let p = rng.next_f64();
-		for i in 0..n {
-			for j in 0..m {
-				if rng.next_f64() < p {
-					cost[i][j] = rng.gen_range(0, 10);
+	pub fn check_potential(&self) {
+		let n = self.es.len();
+		for u in 0..n {
+			for e in &self.es[u] {
+				if e.cap > C::default() {
+					assert!(e.cost + self.p[u] - self.p[e.to] >= W::default());
 				}
 			}
 		}
-		let mut g: Graph<i64, i64> = Graph::new(n + m + 2);
-		for i in 0..n {
-			g.add(n + m, i, 1, 0);
+	}
+	pub fn inc(&mut self, v: V, to: V) -> W {
+		let e = self.es[v].iter().position(|e| e.to == to).unwrap();
+		let r = self.es[v][e].rev;
+		let d = self.es[v][e].cost + self.p[v];
+		let (fixed, dp) = self.shortest(to, v, d);
+		if fixed[v] && self.es[v][e].cost + self.p[v] - self.p[to] < W::default() {
+			self.augment(to, v, dp);
+			self.es[to][r].cap += 1.into();
+			self.es[v][e].cost + self.p[v] - self.p[to]
+		} else {
+			self.es[v][e].cap += 1.into();
+			W::default()
 		}
-		for j in 0..m {
-			g.add(n + j, n + m + 1, 1, 0);
+		// self.check_potential();
+	}
+	pub fn dec(&mut self, v: V, to: V) -> W {
+		let e = self.es[v].iter().position(|e| e.to == to).unwrap();
+		let r = self.es[v][e].rev;
+		if self.es[v][e].cap == C::default() {
+			let (fixed, dp) = self.shortest(v, to, W::default());
+			assert!(fixed[to]);
+			let w = self.es[v][e].cost + self.p[v] - self.p[to];
+			self.augment(v, to, dp);
+			self.es[to][r].cap -= 1.into();
+			-w
+		} else {
+			self.es[v][e].cap -= 1.into();
+			W::default()
 		}
-		const INF: i32 = 1000000000;
-		for i in 0..n {
-			for j in 0..m {
-				if cost[i][j] != !0 {
-					g.add(i, n + j, INF as i64, cost[i][j] as i64);
+		// self.check_potential();
+	}
+	fn augment(&mut self, s: V, t: V, dp: Vec<(W, usize)>) {
+		let mut v = t;
+		while v != s {
+			let i = dp[v].1;
+			let e = self.es[v][i];
+			self.es[e.to][e.rev].cap -= 1.into();
+			self.es[v][i].cap += 1.into();
+			v = e.to;
+		}
+	}
+	fn shortest(&mut self, s: V, t: V, d: W) -> (Vec<bool>, Vec<(W, usize)>) {
+		let n = self.es.len();
+		let mut fixed = vec![false; n];
+		let mut dp = vec![(W::default(), !0); n];
+		let mut que = ::std::collections::BinaryHeap::new();
+		que.push(Entry(s, W::default()));
+		while let Some(Entry(u, d)) = que.pop() {
+			if fixed[u] { continue }
+			fixed[u] = true;
+			if u == t { break }
+			for e in &self.es[u] {
+				let v = e.to;
+				let d2 = d + e.cost + self.p[u] - self.p[v];
+				if e.cap > C::default() && !fixed[v] && (dp[v].1 == !0 || dp[v].0 > d2) {
+					dp[v] = (d2, e.rev);
+					que.push(Entry(v, d2));
 				}
 			}
 		}
-		g.add(n + m + 1, n + m, INF as i64, -INF as i64);
-		g.solve();
-		let mut f = 0;
-		for e in &g.es[n + m + 1] { if e.to == n + m { f = e.init - e.cap } }
-		let tot = g.val::<i64>() + INF as i64 * f;
-		let mut dp = mat![INF; n + 1; 1 << m];
-		dp[0][0] = 0;
-		for i in 0..n {
-			dp[i + 1] = dp[i].clone();
-			for j in 0..1<<m {
-				if dp[i][j] != INF {
-					for k in 0..m {
-						if cost[i][k] != !0 && j >> k & 1 == 0 {
-							ok!(dp[i + 1][j | 1 << k].setmin(dp[i][j] + cost[i][k]));
-						}
-					}
-				}
-			}
+		if fixed[t] {
+			for v in 0..self.es.len() { if fixed[v] { self.p[v] += dp[v].0 - dp[t].0 } }
+		} else {
+			for v in 0..self.es.len() { if fixed[v] { self.p[v] += d } }
 		}
-		use ::common::*;
-		let mut f2 = 0;
-		let mut tot2 = 0;
-		for j in 0..1<<m {
-			if dp[n][j] != INF {
-				if f2.setmax(j.count_ones()) {
-					tot2 = dp[n][j];
-				} else if f2 == j.count_ones() {
-					tot2.setmin(dp[n][j]);
-				}
-			}
-		}
-		assert_eq!(f, f2 as i64);
-		assert_eq!(tot, tot2 as i64);
-		g.fitting();
-		for v in 0..g.es.len() {
-			for e in &g.es[v] {
-				if e.cap > 0 {
-					assert!(e.cost + g.p[v] - g.p[e.to] >= 0);
-				}
-			}
-		}
-		let mut dual = f * (g.p[n + m] - g.p[n + m + 1]);
-		for i in 0..n {
-			let w = g.p[n + m] - g.p[i];
-			if w < 0 { dual -= w }
-		}
-		for j in 0..m {
-			let w = g.p[n + j] - g.p[n + m + 1];
-			if w < 0 { dual -= w }
-		}
-		assert_eq!(tot, -dual);
+		(fixed, dp)
 	}
 }
 
-#[test]
-fn test_flow() {
-	use rand::{self, Rng};
-	let mut rnd: rand::XorShiftRng = rand::random();
-	for _ in 0..100 {
-		let n = 2 + 10 * 5;
-		let (s, t) = (50, 51);
-		const INF: usize = 1 << 29;
-		let mut g = ::graph::dinic::Graph::new(n);
-		let mut g2: Graph<i64, i64> = Graph::new(n);
-		for i in 0..10 {
-			g.add(s, i, INF);
-			g.add(40 + i, t, INF);
-			g2.add(s, i, INF as i64, 0);
-			g2.add(40 + i, t, INF as i64, 0);
-			for j in 0..4 {
-				for k in 0..10 {
-					let d = rnd.gen_range(0, 1000);
-					g.add(10 * j + i, 10 * j + 10 + k, d);
-					g2.add(10 * j + i, 10 * j + 10 + k, d as i64, 0);
-				}
-			}
-		}
-		let (flow, _) = g.clone().solve(s, t);
-		g2.ex[s] = flow as i64 + 1;
-		g2.ex[t] = -(flow as i64) - 1;
-		assert!(!g2.solve());
-	}
-}
-
-#[test]
-fn test_int() {
-	use rand::{self, Rng};
-	let mut rng: rand::XorShiftRng = rand::random();
-	for _ in 0..100 {
-		let n = 20;
-		let d = 10000;
-		let mut g: Graph<i64, i64> = Graph::new(n);
-		for i in 0..n {
-			for j in 0..n {
-				if i != j {
-					g.add(i, j, rng.gen_range(1, d), rng.gen_range(-d, d));
-				}
-			}
-		}
-		assert!(g.solve());
-		let cost = g.val::<i64>();
-		g.fitting();
-		let mut dual = 0;
-		for v in 0..n {
-			for e in &g.es[v] {
-				if e.cap > 0 {
-					assert!(e.cost + g.p[v] - g.p[e.to] >= 0);
-				}
-				dual += e.init * ::std::cmp::max(0, -e.cost - g.p[v] + g.p[e.to]);
-			}
-		}
-		assert_eq!(cost, -dual);
-	}
-}
-
-#[test]
-fn test_float() {
-	use rand::{self, Rng};
-	let mut rng: rand::XorShiftRng = rand::random();
-	define_eps!(F; 1e-10);
-	for _ in 0..100 {
-		let n = 10;
-		let mut g: Graph<F, F> = Graph::new(n);
-		for i in 0..n {
-			for j in 0..n {
-				if i != j {
-					g.add(i, j, F::new(rng.next_f64()), F::new(rng.next_f64() - 0.5));
-				}
-			}
-		}
-		assert!(g.solve());
-		let cost = g.val::<F>();
-		for i in 0..n {
-			g.p[i] /= F::new(n as f64 + 1.0);
-		}
-		let mut dual = F::new(0.0);
-		for v in 0..n {
-			for e in &g.es[v] {
-				if e.cap > F::new(0.0) {
-					assert!(e.cost + g.p[v] - g.p[e.to] >= F::new(0.0));
-				}
-				dual += e.init * ::std::cmp::max(F::new(0.0), -e.cost - g.p[v] + g.p[e.to]);
-			}
-		}
-		assert_eq!(cost, -dual);
-	}
-}

@@ -1,14 +1,13 @@
 #[macro_use]
 pub mod common;
-pub mod mincostflow;
 pub mod mincostcirculation;
 
 use std::io::BufRead;
 use std::io::Write;
 
-pub const N1: usize = 1000000;
-pub const N2: usize = 1000;
-pub const K: usize = 4000;
+pub const N: usize = 1000000;
+pub const N3: usize = 1667;
+pub const N2: usize = 20000;
 
 pub fn read_csv(file: &str) -> Vec<Vec<usize>> {
 	let mut list = vec![];
@@ -27,7 +26,7 @@ pub fn read_csv(file: &str) -> Vec<Vec<usize>> {
 pub fn write_solution(ps: &Vec<usize>, file: &str) {
 	let mut writer = std::io::BufWriter::new(std::fs::File::create(file).unwrap());
 	writeln!(writer, "ChildId,GiftId").unwrap();
-	for i in 0..N1 {
+	for i in 0..ps.len() {
 		writeln!(writer, "{},{}", i, ps[i]).unwrap();
 	}
 }
@@ -43,37 +42,29 @@ pub fn read_solution(file: &str) -> Vec<usize> {
 	list
 }
 
-pub fn construct_graph() -> Vec<Vec<(usize, i64)>> {
-	let cs = read_csv("child_wishlist.csv");
-	let gs = read_csv("gift_goodkids.csv");
-	let mut g = vec![vec![]; N1];
-	for i in 0..N1 {
-		for j in 0..10 {
-			g[i].push((cs[i][j], (2 * (10 - j as i64) + 1) * 100 * 2));
+pub fn construct_graph() -> (Vec<Vec<(usize, i64)>>, Vec<Vec<(usize, i64)>>) {
+	let cs = read_csv("child_wishlist_v2.csv");
+	let gs = read_csv("gift_goodkids_v2.csv");
+	let mut g = vec![vec![]; N];
+	for i in 0..N {
+		for j in 0..100 {
+			g[i].push((cs[i][j], 2 * (100 - j as i64) + 1));
 		}
-	}
-	for i in 0..N2 {
-		for j in 0..1000 {
-			g[gs[i][j]].push((i, (2 * (1000 - j as i64) + 1) * 2));
-		}
-	}
-	for i in 0..N1 {
 		g[i].sort();
-		let mut tmp: Vec<(usize, i64)> = vec![];
-		for &(i, w) in &g[i] {
-			let k = tmp.len();
-			if k > 0 && tmp[k - 1].0 == i {
-				tmp[k - 1].1 -= w;
-			} else {
-				tmp.push((i, -w));
-			}
-		}
-		g[i] = tmp;
 	}
-	g
+	let mut g2 = vec![vec![]; N];
+	for i in 0..1000 {
+		for j in 0..1000 {
+			g2[gs[i][j]].push((i, 2 * (1000 - j as i64) + 1));
+		}
+	}
+	for i in 0..N {
+		g2[i].sort();
+	}
+	(g, g2)
 }
 
-pub fn merge(a: &Vec<(usize, i64)>, b: &Vec<(usize, i64)>) -> Vec<(usize, i64)> {
+pub fn merge<T: std::ops::Add<Output = T> + Copy>(a: &Vec<(usize, T)>, b: &Vec<(usize, T)>) -> Vec<(usize, T)> {
 	let mut c = vec![];
 	let mut i = 0;
 	let mut j = 0;
@@ -95,7 +86,7 @@ pub fn merge(a: &Vec<(usize, i64)>, b: &Vec<(usize, i64)>) -> Vec<(usize, i64)> 
 	c
 }
 
-pub fn get_cost(a: &Vec<(usize, i64)>, i: usize) -> Option<i64> {
+pub fn get_cost<T: Copy>(a: &Vec<(usize, T)>, i: usize) -> Option<T> {
 	for &(j, w) in a {
 		if j == i {
 			return Some(w);
@@ -104,6 +95,6 @@ pub fn get_cost(a: &Vec<(usize, i64)>, i: usize) -> Option<i64> {
 	None
 }
 
-pub fn cost_to_score(cost: i64) -> f64 {
-	(-cost - 200000000 - 2000000) as f64 / 4000000000.0
+pub fn get_score(score1: i64, score2: i64) -> f64 {
+	((score1 - 1000000) as f64 / 200000000.0).powf(3.0) + ((score2 - 1000000) as f64 / 2000000000.0).powf(3.0)
 }
